@@ -22,7 +22,7 @@ export default function Home() {
     const token = localStorage.getItem('token');
     if (token) {
       // 已登录，跳转或其他处理
-      console.log('Token found:', token);
+      // console.log('Token found:', token);
     } else {
       // 未登录
      router.push('/login');

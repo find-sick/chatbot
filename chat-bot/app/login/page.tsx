@@ -2,7 +2,7 @@
 import { useState } from "react";
 import Image from "next/image";
 import './login-styles.css';
-import { addUser,checkUser} from '../actions/user-actions'; // 导入 Server Actions
+import { signUpWithEmail,signInWithEmail,signInWithGoogle} from '../actions/user-actions'; // 导入 Server Actions
 import { useRouter } from 'next/navigation'; 
 // import { signIn } from "next-auth/react"; // 需要安装next-auth库
 
@@ -26,30 +26,49 @@ export default function LoginPage() {
 
   //登录功能
   const handleLogin = async (email: string, password: string) => {
-    const result = await checkUser(email, password);
+    const result = await signInWithEmail(email, password);
+    console.log("登录成功");
+    
     console.log(result);
     
-    if (result) {
+    if (result.session) {
       // 登录成功，跳转到首页
       console.log("登录成功");
-      const {token, user} = result
+      const {access_token: token} = result.session
       //将token和用户信息存储到本地
       localStorage.setItem('token', token);
-      router.push('/'); // 新增：跳转到登录页面
+      //清除表单
+      setEmail("");
+      setPassword("");
+      router.push('/'); //跳转到登录页面
     } else {
       // 登录失败，显示错误信息
       console.log("登录失败");
+      alert(result.error);
     }
   }
   // 注册功能
   const handleRegister = async (email: string, password: string) => {
-    const result = await addUser(email, password);
+    const result = await signUpWithEmail(email, password);
+    console.log("注册成功", result);
+    
     //提示注册成功
-    if (result) {
-    alert("注册成功"); 
-    // 清空表单
-    setEmail("");
-    setPassword("");
+    // if (result) {
+    // alert("注册成功"); 
+    // // 清空表单
+    // setEmail("");
+    // setPassword("");
+    // }
+  }
+  //google登录功能
+  const handleGoogleLogin = async () => {
+    try {
+      const result = await signInWithGoogle();
+      window.location.href = result.url; // ⬅️ 关键：手动跳转
+    } catch (error) {
+      console.error('Google 登录失败:', error);
+      alert('Google 登录失败，请重试');
+    } finally {
     }
   }
 
@@ -67,12 +86,13 @@ export default function LoginPage() {
           <form className="space-y-6" onSubmit={handleSubmit}>
             <div>
               <label className="input-label">
-                账号
+                邮箱
               </label>
               <div className="mt-1">
                 <input
                   id="email"
                   name="email"
+                  type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
@@ -117,7 +137,7 @@ export default function LoginPage() {
 
           <div className="mt-6">
             <button
-            //   onClick={() => signIn("google")}
+              onClick={() => handleGoogleLogin()}
               className="google-btn"
             >
               <Image
@@ -126,6 +146,7 @@ export default function LoginPage() {
                 width={20}
                 height={20}
                 className="mr-3"
+
               />
               使用Google登录
             </button>
