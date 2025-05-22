@@ -57,19 +57,144 @@ export default function Home() {
 
   // 流式对话核心逻辑
   const handleSendMessage = async (userInput: string) => {
-    if (!userInput.trim() || isStreaming || !currentConversationId) return;
+    console.log('发送消息:', {
+      userInput,
+      isStreaming,
+      currentConversationId,
+      conversationsLength: conversations.length
+    });
+
+    if (!userInput.trim()) {
+      console.log('消息为空');
+      return;
+    }
+    if (isStreaming) {
+      console.log('正在流式传输中');
+      return;
+    }
+    if (!currentConversationId) {
+      console.log('没有选中的会话');
+      // 创建一个新的会话
+      const newId = uuidv4();
+      const newConversation: Conversation = {
+        id: newId,
+        title: `对话 ${conversations.length + 1}`,
+        messages: [],
+        timestamp: Date.now()
+      };
+      setConversations(prev => [...prev, newConversation]);
+      setCurrentConversationId(newId);
+      // 直接处理消息，而不是递归调用
+      const newUserMessage = { role: 'user', content: userInput };
+      setConversations(prevConvs => 
+        prevConvs.map(conv => 
+          conv.id === newId 
+            ? { ...conv, messages: [newUserMessage], timestamp: Date.now() } 
+            : conv
+        )
+      );
+      // 继续处理 AI 响应
+      try {
+        setIsStreaming(true);
+        const tempAiMessage = { role: 'assistant', content: '' };
+        setConversations(prevConvs => 
+          prevConvs.map(conv => 
+            conv.id === newId 
+              ? { ...conv, messages: [newUserMessage, tempAiMessage] } 
+              : conv
+          )
+        );
+
+        console.log('准备发送API请求');
+        // 调用 OpenAI 流式 API
+        const response = await fetch(process.env.NEXT_PUBLIC_OPENAI_API_URL!, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${process.env.NEXT_PUBLIC_OPENAI_API_KEY!}`
+          },
+          body: JSON.stringify({
+            model: 'gpt-3.5-turbo',
+            messages: [newUserMessage],
+            stream: true 
+          })
+        });
+
+        console.log('API响应状态:', response.status);
+        if (!response.ok) {
+          throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+        }
+
+        // 处理流式响应
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder('utf-8');
+        if (!reader) throw new Error('无响应流');
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value);
+          chunk.split('\n\n').forEach((line) => {
+            if (!line || line === 'data: [DONE]') return;
+            try {
+              const data = JSON.parse(line.replace('data: ', ''));
+              const delta = data.choices[0]?.delta?.content;
+              if (delta) {
+                setConversations(prevConvs => {
+                  const convIndex = prevConvs.findIndex(conv => conv.id === newId);
+                  if (convIndex === -1) return prevConvs;
+                  
+                  const currentConv = prevConvs[convIndex];
+                  const lastMessageIndex = currentConv.messages.length - 1;
+                  const updatedMessages = [...currentConv.messages];
+                  updatedMessages[lastMessageIndex] = {
+                    ...updatedMessages[lastMessageIndex],
+                    content: updatedMessages[lastMessageIndex].content + delta
+                  };
+                  
+                  return prevConvs.map((conv, index) => 
+                    index === convIndex ? { ...currentConv, messages: updatedMessages } : conv
+                  );
+                });
+              }
+            } catch (e) {
+              console.error('流式解析错误:', e);
+            }
+          });
+        }
+      } catch (error) {
+        console.error('对话请求失败:', error);
+        // 移除失败的临时消息
+        setConversations(prevConvs => {
+          const convIndex = prevConvs.findIndex(conv => conv.id === newId);
+          if (convIndex === -1) return prevConvs;
+          const currentConv = prevConvs[convIndex];
+          return prevConvs.map((conv, index) => 
+            index === convIndex ? { ...currentConv, messages: currentConv.messages.slice(0, -1) } : conv
+          );
+        });
+      } finally {
+        setIsStreaming(false);
+      }
+      return;
+    }
 
     // 创建用户消息
     const newUserMessage = { role: 'user', content: userInput };
+    console.log('新用户消息:', newUserMessage);
     
     // 更新当前会话的消息
-    setConversations(prevConvs => 
-      prevConvs.map(conv => 
+    setConversations(prevConvs => {
+      console.log('更新前的会话:', prevConvs);
+      const updated = prevConvs.map(conv => 
         conv.id === currentConversationId 
           ? { ...conv, messages: [...conv.messages, newUserMessage], timestamp: Date.now() } 
           : conv
-      )
-    );
+      );
+      console.log('更新后的会话:', updated);
+      return updated;
+    });
 
     try {
       setIsStreaming(true);
@@ -77,15 +202,17 @@ export default function Home() {
       const tempAiMessage = { role: 'assistant', content: '' };
       
       // 更新当前会话的消息（添加临时消息）
-      setConversations(prevConvs => 
-        prevConvs.map(conv => 
+      setConversations(prevConvs => {
+        console.log('添加临时AI消息');
+        return prevConvs.map(conv => 
           conv.id === currentConversationId 
             ? { ...conv, messages: [...conv.messages, tempAiMessage] } 
             : conv
-        )
-      );
+        );
+      });
 
-      // 调用 OpenAI 流式 API（保持原有逻辑）
+      console.log('准备发送API请求');
+      // 调用 OpenAI 流式 API
       const response = await fetch(process.env.NEXT_PUBLIC_OPENAI_API_URL!, {
         method: 'POST',
         headers: {
@@ -94,12 +221,15 @@ export default function Home() {
         },
         body: JSON.stringify({
           model: 'gpt-3.5-turbo',
-          messages: messages.concat(newUserMessage), // 使用当前会话的消息
+          messages: messages.concat(newUserMessage),
           stream: true 
         })
       });
 
-      if (!response.ok) throw new Error('API 请求失败');
+      console.log('API响应状态:', response.status);
+      if (!response.ok) {
+        throw new Error(`API 请求失败: ${response.status} ${response.statusText}`);
+      }
 
       // 处理流式响应（更新当前会话的临时消息）
       const reader = response.body?.getReader();

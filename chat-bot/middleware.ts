@@ -11,7 +11,6 @@ export async function middleware(req: NextRequest) {
     data: { session },
   } = await supabase.auth.getSession()
 
-  console.log('session111111', session)
 
   // 获取当前路径
   const path = req.nextUrl.pathname
