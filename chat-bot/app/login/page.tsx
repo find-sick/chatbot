@@ -64,11 +64,15 @@ export default function LoginPage() {
   const handleGoogleLogin = async () => {
     try {
       const result = await signInWithGoogle();
-      window.location.href = result.url; // ⬅️ 关键：手动跳转
+      if (result?.url) {
+        console.log('Google OAuth 跳转URL:', result.url);
+        window.location.href = result.url;
+      } else {
+        throw new Error('未获取到重定向URL');
+      }
     } catch (error) {
       console.error('Google 登录失败:', error);
       alert('Google 登录失败，请重试');
-    } finally {
     }
   }
 

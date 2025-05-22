@@ -1,9 +1,10 @@
 "use client";
 import Image from "next/image";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import './chat-styles.css'; 
 import { useRouter } from 'next/navigation'; 
-import { useEffect } from "react";
+import { v4 as uuidv4 } from 'uuid'; // 新增：安装 uuid 库（npm install uuid）
+import { Conversation } from '../types/conversation'; // 导入会话类型
 // 导入拆分的组件
 import Sidebar from './components/Sidebar';
 import UserAvatar from './components/UserAvatar';
@@ -12,61 +13,204 @@ import MessageInput from './components/MessageInput';
 
 export default function Home() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  // 会话状态管理
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string>('');
+  const [isStreaming, setIsStreaming] = useState(false); 
+  const router = useRouter(); 
 
-  // const handleLogout = () => {
-  //   console.log("执行退出登录操作");
-  // };
-  const router = useRouter(); // 新增：获取路由实例
-
-   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (token) {
-      // 已登录，跳转或其他处理
-      // console.log('Token found:', token);
-    } else {
-      // 未登录
-     router.push('/login');
+  // 从本地存储加载会话
+  useEffect(() => {
+    const savedConversations = localStorage.getItem('chatConversations');
+    if (savedConversations) {
+      setConversations(JSON.parse(savedConversations));
     }
   }, []);
 
+  // 将会话保存到本地存储
+  useEffect(() => {
+    localStorage.setItem('chatConversations', JSON.stringify(conversations));
+  }, [conversations]);
+
+  // 登录验证逻辑
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) router.push('/login');
+  }, []);
+
+  // 获取当前会话的消息
+  const currentConversation = conversations.find(conv => conv.id === currentConversationId);
+  const messages = currentConversation?.messages || [];
+
+  // 新建对话逻辑
+  const handleNewConversation = () => {
+    const newId = uuidv4();
+    const newConversation: Conversation = {
+      id: newId,
+      title: `对话 ${conversations.length + 1}`, // 自动生成标题
+      messages: [],
+      timestamp: Date.now()
+    };
+    setConversations(prev => [...prev, newConversation]);
+    setCurrentConversationId(newId); // 自动切换到新会话
+  };
+
+  // 流式对话核心逻辑
+  const handleSendMessage = async (userInput: string) => {
+    if (!userInput.trim() || isStreaming || !currentConversationId) return;
+
+    // 创建用户消息
+    const newUserMessage = { role: 'user', content: userInput };
+    
+    // 更新当前会话的消息
+    setConversations(prevConvs => 
+      prevConvs.map(conv => 
+        conv.id === currentConversationId 
+          ? { ...conv, messages: [...conv.messages, newUserMessage], timestamp: Date.now() } 
+          : conv
+      )
+    );
+
+    try {
+      setIsStreaming(true);
+      // 创建流式响应的临时消息（初始为空）
+      const tempAiMessage = { role: 'assistant', content: '' };
+      
+      // 更新当前会话的消息（添加临时消息）
+      setConversations(prevConvs => 
+        prevConvs.map(conv => 
+          conv.id === currentConversationId 
+            ? { ...conv, messages: [...conv.messages, tempAiMessage] } 
+            : conv
+        )
+      );
+
+      // 调用 OpenAI 流式 API（保持原有逻辑）
+      const response = await fetch(process.env.NEXT_PUBLIC_OPENAI_API_URL!, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.NEXT_PUBLIC_OPENAI_API_KEY!}`
+        },
+        body: JSON.stringify({
+          model: 'gpt-3.5-turbo',
+          messages: messages.concat(newUserMessage), // 使用当前会话的消息
+          stream: true 
+        })
+      });
+
+      if (!response.ok) throw new Error('API 请求失败');
+
+      // 处理流式响应（更新当前会话的临时消息）
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder('utf-8');
+      if (!reader) throw new Error('无响应流');
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        chunk.split('\n\n').forEach((line) => {
+          if (!line || line === 'data: [DONE]') return;
+          try {
+            const data = JSON.parse(line.replace('data: ', ''));
+            const delta = data.choices[0]?.delta?.content;
+            if (delta) {
+              setConversations(prevConvs => {
+                const convIndex = prevConvs.findIndex(conv => conv.id === currentConversationId);
+                if (convIndex === -1) return prevConvs;
+                
+                const currentConv = prevConvs[convIndex];
+                const lastMessageIndex = currentConv.messages.length - 1;
+                const updatedMessages = [...currentConv.messages];
+                updatedMessages[lastMessageIndex] = {
+                  ...updatedMessages[lastMessageIndex],
+                  content: updatedMessages[lastMessageIndex].content + delta
+                };
+                
+                return prevConvs.map((conv, index) => 
+                  index === convIndex ? { ...currentConv, messages: updatedMessages } : conv
+                );
+              });
+            }
+          } catch (e) {
+            console.error('流式解析错误:', e);
+          }
+        });
+      }
+    } catch (error) {
+      console.error('对话请求失败:', error);
+      // 移除失败的临时消息
+      setConversations(prevConvs => {
+        const convIndex = prevConvs.findIndex(conv => conv.id === currentConversationId);
+        if (convIndex === -1) return prevConvs;
+        const currentConv = prevConvs[convIndex];
+        return prevConvs.map((conv, index) => 
+          index === convIndex ? { ...currentConv, messages: currentConv.messages.slice(0, -1) } : conv
+        );
+      });
+    } finally {
+      setIsStreaming(false);
+    }
+  };
+
+  //删除会话
+  const handleDeleteConversation = (id: string) => {
+    // 过滤掉被删除的会话
+    setConversations(prev => prev.filter(conv => conv.id !== id));
+    
+    // 如果删除的是当前选中的会话，自动切换到其他会话
+    if (currentConversationId === id) {
+      const remainingConvs = conversations.filter(conv => conv.id !== id);
+      const newCurrentId = remainingConvs.length > 0 ? remainingConvs[0].id : '';
+      setCurrentConversationId(newCurrentId);
+    }
+  };
+  
+
   return (
     <div className="grid min-h-screen p-8 pb-20 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="grid grid-cols-[1fr] sm:grid-cols-[auto_1fr] gap-8 h-screen relative">
-        {/* 侧边栏组件 */}
-        <Sidebar 
-          isOpen={isSidebarOpen} 
-          onClose={() => setIsSidebarOpen(false)} 
-        />
-
-        {/* 右侧主区域 */}
-        <div className="flex flex-col">
-          {/* 顶部标题和用户头像（修改布局方式） */}
-          <div className="relative flex items-center justify-between h-25 px-4 w-full">
-            <div></div> {/* 占位元素，用于保持布局 */}
-            <h2 className="text-4xl font-bold text-gray-900 dark:text-white">智能助手</h2>
-            <UserAvatar  className="absolute right-5"  />
-          </div>
-          {/* 消息列表组件 */}
-          <ChatMessages />
-          {/* 输入框组件 */}
-          <MessageInput />
-        </div>
-
-        {/* 固定侧边栏开关按钮 */}
-        {!isSidebarOpen && (
-          <button
-            className="fixed top-6 left-6 z-50 p-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-full shadow-lg transition-transform hover:scale-105"
-            onClick={() => setIsSidebarOpen(true)}
+      <main 
+            // 动态调整网格列：侧边栏隐藏时用单栏，显示时用双栏
+            className={`grid ${isSidebarOpen ? 'sm:grid-cols-[auto_1fr]' : 'grid-cols-[1fr]'} gap-8 h-screen relative`}
           >
-            <Image
-              src="/left.svg"
-              alt="打开侧边栏"
-              width={24}
-              height={24}
-            />
-          </button>
-        )}
-      </main>
+            {/* 侧边栏组件 */}
+              <Sidebar 
+               isOpen={isSidebarOpen} 
+               onClose={() => setIsSidebarOpen(false)}
+               conversations={conversations}
+               currentConversationId={currentConversationId}
+               onSelectConversation={setCurrentConversationId}
+               onNewConversation={handleNewConversation}
+               onDeleteConversation={handleDeleteConversation} // 传递删除回调
+               />
+      
+            {/* 对话区域 */}
+            <div className="flex flex-col">
+              <div className="relative flex items-center justify-between h-25 px-4 w-full">
+                <div></div>
+                <h2 className="text-4xl text-center font-bold text-gray-900 dark:text-white">智能助手</h2>
+                <UserAvatar className="absolute right-5" />
+              </div>
+      
+              <ChatMessages messages={messages} />
+              <MessageInput 
+                onSend={handleSendMessage} 
+                isLoading={isStreaming} 
+              />
+            </div>
+      
+            {/* 侧边栏开关按钮 */}
+            {!isSidebarOpen && (
+              <button
+                className="fixed top-6 left-6 z-50 p-2 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 rounded-full shadow-lg transition-transform hover:scale-105"
+                onClick={() => setIsSidebarOpen(true)}
+              >
+                <Image src="/left.svg" alt="打开侧边栏" width={24} height={24} />
+              </button>
+            )}
+          </main>
     </div>
   );
 }

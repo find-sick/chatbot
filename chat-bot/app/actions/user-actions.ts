@@ -50,11 +50,14 @@ export async function signInWithEmail(email: string, password: string) {
 export async function signInWithGoogle() {
   const supabase = createServerComponentClient({ cookies });
   
-  // 调用 Supabase OAuth 登录接口
   const { data, error } = await supabase.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}`, // 登录成功重定向地址
+      redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
+      queryParams: {
+        access_type: 'offline',
+        prompt: 'consent',
+      },
     },
   });
 

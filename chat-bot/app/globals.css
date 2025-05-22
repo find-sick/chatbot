@@ -41,7 +41,6 @@ button {
   }
 }
 
-/* 修改：新增margin:0和padding:0 */
 body {
   background: var(--background);
   color: var(--foreground);
