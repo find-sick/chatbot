@@ -34,8 +34,8 @@ export default function Home() {
 
   // 登录验证逻辑
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    if (!token) router.push('/login');
+    // const token = localStorage.getItem('token');
+    // if (!token) router.push('/login');
   }, []);
 
   // 获取当前会话的消息

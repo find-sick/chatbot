@@ -3,7 +3,7 @@
 import { supabaseServer } from '@/lib/supabase-server';
 import { cookies } from 'next/headers';
 import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
-import { generateToken } from '@/lib/auth';
+import { createServerActionClient } from '@supabase/auth-helpers-nextjs';
 
 // 注册用户
 export async function signUpWithEmail(email: string, password: string) {
@@ -24,26 +24,13 @@ export async function signUpWithEmail(email: string, password: string) {
 
 // 邮箱密码登录
 export async function signInWithEmail(email: string, password: string) {
-  if (!email || !password) throw new Error('邮箱和密码不能为空');
-
-  // 调用 Supabase Auth 登录接口
-  const { data, error } = await supabaseServer.auth.signInWithPassword({
+  const supabase = createServerActionClient({ cookies });
+  const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
-
-   if (error) {
-    if (error.status === 400 && error.code === 'invalid_credentials') {
-      return { error: '邮箱或密码错误' };
-    }
-    console.error('登录时发生意外错误:', error.message);
-    return { error: '登录失败，请稍后再试' };
-  }
-
-  //如果你需要存储额外信息,可以在这里对自建user表进行操作
-
-  // 登录成功后自动管理 session（Supabase 会自动设置 cookie）
-  return { user: data.user, session: data.session };
+  // 这里 supabase 会自动把 session 写入 cookies
+  return { user: data.user, session: data.session, error };
 }
 
 // Google登录
@@ -58,6 +45,7 @@ export async function signInWithGoogle() {
         access_type: 'offline',
         prompt: 'consent',
       },
+      skipBrowserRedirect: false
     },
   });
 
